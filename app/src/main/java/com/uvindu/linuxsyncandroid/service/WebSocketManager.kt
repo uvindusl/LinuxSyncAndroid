@@ -5,6 +5,7 @@ import com.uvindu.linuxsyncandroid.domain.model.ConnectionState
 import com.uvindu.linuxsyncandroid.domain.model.MessageType
 import com.uvindu.linuxsyncandroid.domain.model.PairedDevice
 import com.uvindu.linuxsyncandroid.utils.crypto.CryptoUtil
+import com.uvindu.linuxsyncandroid.utils.network.MDNSResolver
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
@@ -60,14 +61,29 @@ object WebSocketManager {
 
         currentDevice = device
         cancelReconnect()
-        attemptConnect(device)
+        scope.launch {
+            attemptConnect(device)
+        }
     }
 
-    private fun attemptConnect(device: PairedDevice) {
+    private suspend fun attemptConnect(device: PairedDevice) {
         _connectionState.value = ConnectionState.Connecting
+        
+        // Try to resolve mDNS hostname first for cross-network support
+        var resolvedIp = device.ip
+        if (device.ip.contains(".") == false || device.ip.endsWith(".local") || device.ip.endsWith(".local.")) {
+            Log.d(TAG, "Attempting mDNS resolution for ${device.ip}")
+            val mdnsIp = MDNSResolver.resolveHostname(device.ip)
+            if (mdnsIp != null) {
+                Log.d(TAG, "mDNS resolved to: $mdnsIp")
+                resolvedIp = mdnsIp
+            } else {
+                Log.w(TAG, "mDNS resolution failed, using original IP: ${device.ip}")
+            }
+        }
 
         val request = Request.Builder()
-            .url("ws://${device.ip}:${device.port}")
+            .url("ws://$resolvedIp:${device.port}")
             .build()
 
         client.newWebSocket(request, object : WebSocketListener() {

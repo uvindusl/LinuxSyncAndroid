@@ -10,9 +10,7 @@ import androidx.datastore.preferences.preferencesDataStore
 // DataStore extension
 private val Context.phonelinksDataStore: DataStore<Preferences> by preferencesDataStore(name = "phonelink_prefs")
 
-/**
- * Object holding all preference keys for DataStore/home/uvindu/Documents/Personal/Kotlin/LinuxSyncLinux
- */
+
 object PreferenceKeys {
     val DEVICE_NAME = stringPreferencesKey("device_name")
     val DEVICE_IP = stringPreferencesKey("device_ip")
