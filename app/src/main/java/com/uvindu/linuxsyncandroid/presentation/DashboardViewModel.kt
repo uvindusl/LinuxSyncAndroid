@@ -54,7 +54,11 @@ class DashboardViewModel(
 
     fun checkNotificationPermission(context: Context) {
         val areNotificationsEnabled = NotificationManagerCompat.from(context).areNotificationsEnabled()
-        uiState = uiState.copy(areNotificationsEnabled = areNotificationsEnabled)
+        val isListenerEnabled = com.uvindu.linuxsyncandroid.utils.isNotificationListenerEnabled(
+            context, 
+            com.uvindu.linuxsyncandroid.service.LinkNotificationService::class.java
+        )
+        uiState = uiState.copy(areNotificationsEnabled = areNotificationsEnabled && isListenerEnabled)
     }
 
     fun establishConnection(payload: QRCodePayload, context: Context) {

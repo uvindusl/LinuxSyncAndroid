@@ -25,6 +25,7 @@ class LinkNotificationService : NotificationListenerService() {
 
     override fun onListenerConnected() {
         super.onListenerConnected()
+        Log.d(TAG, "Notification listener connected!")
         // Post all active notifications
         activeNotifications.forEach { onNotificationPosted(it) }
         try {
@@ -54,26 +55,31 @@ class LinkNotificationService : NotificationListenerService() {
 //            return
 //        }
 
-        val extras = sbn.notification.extras
-        val title  = extras.getString("android.title") ?: return
-        val body   = extras.getCharSequence("android.text")?.toString() ?: ""
+        try {
+            val extras = sbn.notification.extras
+            val title  = extras.getString("android.title") ?: return
+            val body   = extras.getCharSequence("android.text")?.toString() ?: ""
 
-        val replyAction = sbn.notification.actions
-            ?.firstOrNull { it.remoteInputs?.isNotEmpty() == true }
+            val replyAction = sbn.notification.actions
+                ?.firstOrNull { it.remoteInputs?.isNotEmpty() == true }
 
-        val msg = JSONObject().apply {
-            put("type",         MessageType.NOTIFICATION)
-            put("id",           sbn.key)
-            put("app_name",     getAppName(sbn.packageName))
-            put("pkg",          sbn.packageName)
-            put("title",        title)
-            put("body",         body)
-            put("is_replyable", replyAction != null)
-            put("reply_key",    replyAction?.remoteInputs?.firstOrNull()?.resultKey ?: "")
-            put("timestamp",    System.currentTimeMillis())
+            val msg = JSONObject().apply {
+                put("type",         MessageType.NOTIFICATION)
+                put("id",           sbn.key)
+                put("app_name",     getAppName(sbn.packageName))
+                put("pkg",          sbn.packageName)
+                put("title",        title)
+                put("body",         body)
+                put("is_replyable", replyAction != null)
+                put("reply_key",    replyAction?.remoteInputs?.firstOrNull()?.resultKey ?: "")
+                put("timestamp",    System.currentTimeMillis())
+            }
+            Log.d(TAG, "Sending notification: $msg")
+            WebSocketManager.sendMessage(msg)
+            Log.d(TAG, "Notification from ${sbn.packageName}: $title - sent to server")
+        } catch (e: Exception) {
+            Log.e(TAG, "Error processing notification: ${e.message}", e)
         }
-        WebSocketManager.sendMessage(msg)
-        Log.d(TAG, "Notification from ${sbn.packageName}: $title")
     }
 
     override fun onNotificationRemoved(sbn: StatusBarNotification) {

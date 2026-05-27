@@ -15,6 +15,7 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
+import com.uvindu.linuxsyncandroid.utils.openNotificationListenerSettings
 import com.uvindu.linuxsyncandroid.utils.openNotificationSettings
 
 @Composable
@@ -35,13 +36,16 @@ fun NotificationPermissionWarning() {
             )
             Spacer(modifier = Modifier.height(8.dp))
             Text(
-                text = "The background service requires notifications to run reliably. " +
-                        "Please enable them for this app in settings.",
+                text = "To sync notifications, you need to:\n1. Enable notifications for this app\n2. Enable 'Notification access' in accessibility settings",
                 style = MaterialTheme.typography.bodyMedium
             )
             Spacer(modifier = Modifier.height(12.dp))
             Button(onClick = { openNotificationSettings(context) }) {
-                Text("Open Settings")
+                Text("Enable Notifications")
+            }
+            Spacer(modifier = Modifier.height(8.dp))
+            Button(onClick = { openNotificationListenerSettings(context) }) {
+                Text("Enable Notification Access")
             }
         }
     }
