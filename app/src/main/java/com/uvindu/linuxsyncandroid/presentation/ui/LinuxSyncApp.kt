@@ -41,6 +41,9 @@ fun LinuxSyncApp() {
             },
             onDisconnectRequested = {
                 dashboardViewModel.terminateConnection()
+            },
+            onUnpairRequested = {
+                dashboardViewModel.unpairDevice()
             }
         )
     } else {

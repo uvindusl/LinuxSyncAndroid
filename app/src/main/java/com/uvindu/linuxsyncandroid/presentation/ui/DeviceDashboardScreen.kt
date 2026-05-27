@@ -48,7 +48,8 @@ import com.uvindu.linuxsyncandroid.utils.openNotificationSettings
 fun DeviceDashboardScreen(
     state: DashboardState,
     onConfigToggle: (String, Boolean) -> Unit,
-    onDisconnectRequested: () -> Unit
+    onDisconnectRequested: () -> Unit,
+    onUnpairRequested: () -> Unit
 ) {
     Scaffold(
         topBar = {
@@ -58,7 +59,7 @@ fun DeviceDashboardScreen(
                     IconButton(onClick = onDisconnectRequested) {
                         Icon(
                             imageVector = Icons.Default.PowerSettingsNew,
-                            contentDescription = "Kill Link Connection",
+                            contentDescription = "Disconnect",
                             tint = MaterialTheme.colorScheme.error
                         )
                     }
@@ -70,7 +71,8 @@ fun DeviceDashboardScreen(
             modifier = Modifier
                 .fillMaxSize()
                 .padding(innerPadding)
-                .padding(horizontal = 20.dp),
+                .padding(horizontal = 20.dp)
+                .padding(vertical = 16.dp),
             verticalArrangement = Arrangement.spacedBy(16.dp)
         ) {
             if (!state.areNotificationsEnabled) {
@@ -95,7 +97,7 @@ fun DeviceDashboardScreen(
                         modifier = Modifier.size(28.dp)
                     )
                     Spacer(modifier = Modifier.width(16.dp))
-                    Column {
+                    Column(modifier = Modifier.weight(1f)) {
                         Text(
                             text = state.deviceName,
                             style = MaterialTheme.typography.titleMedium,
@@ -140,6 +142,23 @@ fun DeviceDashboardScreen(
                             onToggleChanged = { onConfigToggle("dnd_mode", it) }
                         )
                     }
+                }
+                
+                Spacer(modifier = Modifier.height(12.dp))
+                Button(
+                    onClick = onUnpairRequested,
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .height(48.dp),
+                    colors = androidx.compose.material3.ButtonDefaults.buttonColors(
+                        containerColor = MaterialTheme.colorScheme.errorContainer
+                    )
+                ) {
+                    Text(
+                        "Unpair Device",
+                        color = MaterialTheme.colorScheme.error,
+                        fontWeight = FontWeight.Medium
+                    )
                 }
             }
         }

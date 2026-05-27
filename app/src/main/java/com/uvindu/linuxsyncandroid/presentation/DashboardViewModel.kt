@@ -2,6 +2,7 @@ package com.uvindu.linuxsyncandroid.presentation
 
 import android.content.Context
 import android.content.Intent
+import android.util.Log
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.setValue
@@ -14,6 +15,7 @@ import com.uvindu.linuxsyncandroid.domain.model.PairedDevice
 import com.uvindu.linuxsyncandroid.domain.model.QRCodePayload
 import com.uvindu.linuxsyncandroid.domain.repository.DeviceRepository
 import com.uvindu.linuxsyncandroid.service.WebSocketManager
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.launchIn
 import kotlinx.coroutines.flow.onEach
 import kotlinx.coroutines.launch
@@ -27,8 +29,21 @@ class DashboardViewModel(
         private set
 
     private val messageHandler: (JSONObject) -> Unit = { msg -> handleIncoming(msg) }
+    private var currentDevice: PairedDevice? = null
+    private val TAG = "DashboardViewModel"
 
     init {
+        // Load saved device on startup and auto-connect
+        viewModelScope.launch {
+            deviceRepository.getPairedDevice().collect { savedDevice ->
+                if (savedDevice != null && currentDevice == null) {
+                    currentDevice = savedDevice
+                    Log.d(TAG, "Found saved device: ${savedDevice.deviceName}, attempting to connect...")
+                    WebSocketManager.connect(savedDevice)
+                }
+            }
+        }
+
         // observe WebSocketManager connection state
         WebSocketManager.connectionState.onEach { state ->
             uiState = when (state) {
@@ -70,6 +85,7 @@ class DashboardViewModel(
                 token      = payload.tk,
                 encKey     = payload.ek
             )
+            currentDevice = device
             // save to DataStore so it persists
             deviceRepository.savePairedDevice(device)
 
@@ -112,6 +128,16 @@ class DashboardViewModel(
     fun terminateConnection() {
         WebSocketManager.disconnect()
         uiState = DashboardState()
+    }
+
+    fun unpairDevice() {
+        viewModelScope.launch {
+            Log.d(TAG, "Unpairing device...")
+            WebSocketManager.disconnect()
+            deviceRepository.clearPairedDevice()
+            currentDevice = null
+            uiState = DashboardState()
+        }
     }
 
     override fun onCleared() {
