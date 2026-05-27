@@ -4,7 +4,7 @@ import com.uvindu.linuxsyncandroid.domain.model.PairedDevice
 import kotlinx.coroutines.flow.Flow
 
 interface DeviceRepository {
+    fun getPairedDevice(): Flow<PairedDevice?>
     suspend fun savePairedDevice(device: PairedDevice)
-    fun getPairedDevice(): Flow<PairedDevice>
-    suspend fun deletePairedDevice()
+    suspend fun clearPairedDevice()
 }
