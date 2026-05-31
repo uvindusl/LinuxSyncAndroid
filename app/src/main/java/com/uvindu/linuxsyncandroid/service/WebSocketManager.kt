@@ -1,5 +1,8 @@
 package com.uvindu.linuxsyncandroid.service
 
+import android.content.Context
+import android.os.Build
+import android.provider.Settings
 import android.util.Log
 import com.uvindu.linuxsyncandroid.domain.model.ConnectionState
 import com.uvindu.linuxsyncandroid.domain.model.MessageType
@@ -36,6 +39,9 @@ object WebSocketManager {
     private val scope = CoroutineScope(Dispatchers.IO + SupervisorJob())
     private var reconnectJob: Job? = null
 
+    // We store a weak application context or pass context explicitly to prevent leaks
+    private var appContext: Context? = null
+
     private val _connectionState = MutableStateFlow<ConnectionState>(ConnectionState.Disconnected)
     val connectionState: StateFlow<ConnectionState> = _connectionState
 
@@ -55,10 +61,12 @@ object WebSocketManager {
         .pingInterval(20, TimeUnit.SECONDS)
         .build()
 
-    fun connect(device: PairedDevice) {
+    // 1. Context added here to fetch the device name safely
+    fun connect(context: Context, device: PairedDevice) {
         if (_connectionState.value is ConnectionState.Connected ||
             _connectionState.value is ConnectionState.Connecting) return
 
+        this.appContext = context.applicationContext // Save app context to avoid memory leaks
         currentDevice = device
         cancelReconnect()
         scope.launch {
@@ -68,10 +76,9 @@ object WebSocketManager {
 
     private suspend fun attemptConnect(device: PairedDevice) {
         _connectionState.value = ConnectionState.Connecting
-        
-        // Try to resolve mDNS hostname first for cross-network support
+
         var resolvedIp = device.ip
-        if (device.ip.contains(".") == false || device.ip.endsWith(".local") || device.ip.endsWith(".local.")) {
+        if (!device.ip.contains(".") || device.ip.endsWith(".local") || device.ip.endsWith(".local.")) {
             Log.d(TAG, "Attempting mDNS resolution for ${device.ip}")
             val mdnsIp = MDNSResolver.resolveHostname(device.ip)
             if (mdnsIp != null) {
@@ -91,25 +98,30 @@ object WebSocketManager {
             override fun onOpen(ws: WebSocket, response: Response) {
                 Log.d(TAG, "Socket open — sending auth")
                 webSocket = ws
+
+                val context = appContext
+                val deviceName = if (context != null) getUserDeviceName(context) else "Android Device"
+
                 val auth = JSONObject().apply {
                     put("type",        MessageType.AUTH)
                     put("token",       device.token)
-                    put("device_name", android.os.Build.MODEL)
+                    put("device_name", deviceName)
                 }
                 ws.send(auth.toString())
             }
 
             override fun onMessage(ws: WebSocket, text: String) {
                 try {
-                    // auth_ok is plain JSON — encryption starts after this
                     if (_connectionState.value is ConnectionState.Connecting) {
                         val msg = JSONObject(text)
                         if (msg.optString("type") == MessageType.AUTH_OK) {
                             Log.d(TAG, "Auth OK — connected")
-                            _connectionState.value = ConnectionState.Connected(device)
+
+                            // Important: update states BEFORE processing queue to allow direct sends
                             isSocketConnected = true
+                            _connectionState.value = ConnectionState.Connected(device)
                             cancelReconnect()
-                            // Process any queued messages
+
                             scope.launch {
                                 while (messageQueue.isNotEmpty()) {
                                     messageQueue.poll()?.let { queuedMsg ->
@@ -122,12 +134,10 @@ object WebSocketManager {
                         }
                     }
 
-                    // all subsequent messages are encrypted
                     val keyBytes  = CryptoUtil.decodeKey(device.encKey)
                     val plaintext = CryptoUtil.decrypt(text, keyBytes)
                     val data      = JSONObject(plaintext)
-                    
-                    // Notify all receivers
+
                     messageReceivers.forEach { receiver ->
                         try {
                             receiver(data)
@@ -151,6 +161,16 @@ object WebSocketManager {
                 handleDisconnect(shouldReconnect = true)
             }
         })
+    }
+
+    // 2. Moved helper function outside of the anonymous WebSocketListener
+    private fun getUserDeviceName(context: Context): String {
+        val name = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.N_MR1) {
+            Settings.Global.getString(context.contentResolver, Settings.Global.DEVICE_NAME)
+        } else {
+            Settings.Secure.getString(context.contentResolver, "bluetooth_name")
+        }
+        return name ?: "Unknown Android Device"
     }
 
     fun sendMessage(msg: JSONObject) {
@@ -201,6 +221,7 @@ object WebSocketManager {
         webSocket?.close(1000, "User disconnected")
         webSocket = null
         isSocketConnected = false
+        appContext = null // Clear context references when explicitly disconnecting
         _connectionState.value = ConnectionState.Disconnected
     }
 
