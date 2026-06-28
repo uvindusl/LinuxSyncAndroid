@@ -1,11 +1,12 @@
 package com.uvindu.linuxsyncandroid.presentation
 
+import android.app.Application
 import android.content.Context
-import android.content.Intent
+import android.util.Log
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.setValue
-import androidx.lifecycle.ViewModel
+import androidx.lifecycle.AndroidViewModel // Switched to AndroidViewModel
 import androidx.lifecycle.viewModelScope
 import androidx.core.app.NotificationManagerCompat
 import com.uvindu.linuxsyncandroid.domain.model.ConnectionState
@@ -19,16 +20,33 @@ import kotlinx.coroutines.flow.onEach
 import kotlinx.coroutines.launch
 import org.json.JSONObject
 
+// 1. Changed base class to AndroidViewModel and added application constructor parameter
 class DashboardViewModel(
+    application: Application,
     private val deviceRepository: DeviceRepository
-) : ViewModel() {
+) : AndroidViewModel(application) {
 
     var uiState by mutableStateOf(DashboardState())
         private set
 
     private val messageHandler: (JSONObject) -> Unit = { msg -> handleIncoming(msg) }
+    private var currentDevice: PairedDevice? = null
+    private val TAG = "DashboardViewModel"
 
     init {
+        // Load saved device on startup and auto-connect
+        viewModelScope.launch {
+            deviceRepository.getPairedDevice().collect { savedDevice ->
+                if (savedDevice != null && currentDevice == null) {
+                    currentDevice = savedDevice
+                    Log.d(TAG, "Found saved device: ${savedDevice.deviceName}, attempting to connect...")
+
+                    // 2. Used getApplication() to pass the global context here
+                    WebSocketManager.connect(getApplication(), savedDevice)
+                }
+            }
+        }
+
         // observe WebSocketManager connection state
         WebSocketManager.connectionState.onEach { state ->
             uiState = when (state) {
@@ -55,7 +73,7 @@ class DashboardViewModel(
     fun checkNotificationPermission(context: Context) {
         val areNotificationsEnabled = NotificationManagerCompat.from(context).areNotificationsEnabled()
         val isListenerEnabled = com.uvindu.linuxsyncandroid.utils.isNotificationListenerEnabled(
-            context, 
+            context,
             com.uvindu.linuxsyncandroid.service.LinkNotificationService::class.java
         )
         uiState = uiState.copy(areNotificationsEnabled = areNotificationsEnabled && isListenerEnabled)
@@ -70,11 +88,12 @@ class DashboardViewModel(
                 token      = payload.tk,
                 encKey     = payload.ek
             )
+            currentDevice = device
             // save to DataStore so it persists
             deviceRepository.savePairedDevice(device)
 
-            // connect via WebSocketManager
-            WebSocketManager.connect(device)
+            // 3. Passed the incoming context parameter here
+            WebSocketManager.connect(context, device)
         }
     }
 
@@ -112,6 +131,16 @@ class DashboardViewModel(
     fun terminateConnection() {
         WebSocketManager.disconnect()
         uiState = DashboardState()
+    }
+
+    fun unpairDevice() {
+        viewModelScope.launch {
+            Log.d(TAG, "Unpairing device...")
+            WebSocketManager.disconnect()
+            deviceRepository.clearPairedDevice()
+            currentDevice = null
+            uiState = DashboardState()
+        }
     }
 
     override fun onCleared() {

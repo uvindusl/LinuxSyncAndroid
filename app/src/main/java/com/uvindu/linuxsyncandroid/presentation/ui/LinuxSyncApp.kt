@@ -1,5 +1,6 @@
 package com.uvindu.linuxsyncandroid.presentation.ui
 
+import android.app.Application
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.ui.platform.LocalContext
@@ -20,7 +21,8 @@ fun LinuxSyncApp() {
         factory = object : ViewModelProvider.Factory {
             @Suppress("UNCHECKED_CAST")
             override fun <T : ViewModel> create(modelClass: Class<T>): T {
-                return DashboardViewModel(repository) as T
+                // Pass appContext (which is your Application instance) along with the repository
+                return DashboardViewModel(appContext, repository) as T
             }
         }
     )
@@ -41,6 +43,9 @@ fun LinuxSyncApp() {
             },
             onDisconnectRequested = {
                 dashboardViewModel.terminateConnection()
+            },
+            onUnpairRequested = {
+                dashboardViewModel.unpairDevice()
             }
         )
     } else {

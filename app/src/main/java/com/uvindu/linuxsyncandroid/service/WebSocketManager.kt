@@ -1,10 +1,14 @@
 package com.uvindu.linuxsyncandroid.service
 
+import android.content.Context
+import android.os.Build
+import android.provider.Settings
 import android.util.Log
 import com.uvindu.linuxsyncandroid.domain.model.ConnectionState
 import com.uvindu.linuxsyncandroid.domain.model.MessageType
 import com.uvindu.linuxsyncandroid.domain.model.PairedDevice
 import com.uvindu.linuxsyncandroid.utils.crypto.CryptoUtil
+import com.uvindu.linuxsyncandroid.utils.network.MDNSResolver
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
@@ -21,6 +25,7 @@ import okhttp3.WebSocket
 import okhttp3.WebSocketListener
 import org.json.JSONObject
 import java.util.concurrent.ConcurrentLinkedQueue
+import java.util.concurrent.CopyOnWriteArrayList
 import java.util.concurrent.TimeUnit
 
 object WebSocketManager {
@@ -31,14 +36,18 @@ object WebSocketManager {
     private val messageQueue = ConcurrentLinkedQueue<JSONObject>()
 
     private var webSocket: WebSocket? = null
+    @Volatile
     private var currentDevice: PairedDevice? = null
     private val scope = CoroutineScope(Dispatchers.IO + SupervisorJob())
     private var reconnectJob: Job? = null
 
+    // We store a weak application context or pass context explicitly to prevent leaks
+    private var appContext: Context? = null
+
     private val _connectionState = MutableStateFlow<ConnectionState>(ConnectionState.Disconnected)
     val connectionState: StateFlow<ConnectionState> = _connectionState
 
-    private val messageReceivers = mutableListOf<(JSONObject) -> Unit>()
+    private val messageReceivers = CopyOnWriteArrayList<(JSONObject) -> Unit>()
 
     fun addMessageReceiver(receiver: (JSONObject) -> Unit) {
         messageReceivers.add(receiver)
@@ -54,20 +63,36 @@ object WebSocketManager {
         .pingInterval(20, TimeUnit.SECONDS)
         .build()
 
-    fun connect(device: PairedDevice) {
+    // 1. Context added here to fetch the device name safely
+    fun connect(context: Context, device: PairedDevice) {
         if (_connectionState.value is ConnectionState.Connected ||
             _connectionState.value is ConnectionState.Connecting) return
 
+        this.appContext = context.applicationContext // Save app context to avoid memory leaks
         currentDevice = device
         cancelReconnect()
-        attemptConnect(device)
+        scope.launch {
+            attemptConnect(device)
+        }
     }
 
-    private fun attemptConnect(device: PairedDevice) {
+    private suspend fun attemptConnect(device: PairedDevice) {
         _connectionState.value = ConnectionState.Connecting
 
+        var resolvedIp = device.ip
+        if (!device.ip.contains(".") || device.ip.endsWith(".local") || device.ip.endsWith(".local.")) {
+            Log.d(TAG, "Attempting mDNS resolution for ${device.ip}")
+            val mdnsIp = MDNSResolver.resolveHostname(device.ip)
+            if (mdnsIp != null) {
+                Log.d(TAG, "mDNS resolved to: $mdnsIp")
+                resolvedIp = mdnsIp
+            } else {
+                Log.w(TAG, "mDNS resolution failed, using original IP: ${device.ip}")
+            }
+        }
+
         val request = Request.Builder()
-            .url("ws://${device.ip}:${device.port}")
+            .url("ws://$resolvedIp:${device.port}")
             .build()
 
         client.newWebSocket(request, object : WebSocketListener() {
@@ -75,25 +100,30 @@ object WebSocketManager {
             override fun onOpen(ws: WebSocket, response: Response) {
                 Log.d(TAG, "Socket open — sending auth")
                 webSocket = ws
+
+                val context = appContext
+                val deviceName = if (context != null) getUserDeviceName(context) else "Android Device"
+
                 val auth = JSONObject().apply {
                     put("type",        MessageType.AUTH)
                     put("token",       device.token)
-                    put("device_name", android.os.Build.MODEL)
+                    put("device_name", deviceName)
                 }
                 ws.send(auth.toString())
             }
 
             override fun onMessage(ws: WebSocket, text: String) {
                 try {
-                    // auth_ok is plain JSON — encryption starts after this
                     if (_connectionState.value is ConnectionState.Connecting) {
                         val msg = JSONObject(text)
                         if (msg.optString("type") == MessageType.AUTH_OK) {
                             Log.d(TAG, "Auth OK — connected")
-                            _connectionState.value = ConnectionState.Connected(device)
+
+                            // Important: update states BEFORE processing queue to allow direct sends
                             isSocketConnected = true
+                            _connectionState.value = ConnectionState.Connected(device)
                             cancelReconnect()
-                            // Process any queued messages
+
                             scope.launch {
                                 while (messageQueue.isNotEmpty()) {
                                     messageQueue.poll()?.let { queuedMsg ->
@@ -106,12 +136,10 @@ object WebSocketManager {
                         }
                     }
 
-                    // all subsequent messages are encrypted
                     val keyBytes  = CryptoUtil.decodeKey(device.encKey)
                     val plaintext = CryptoUtil.decrypt(text, keyBytes)
                     val data      = JSONObject(plaintext)
-                    
-                    // Notify all receivers
+
                     messageReceivers.forEach { receiver ->
                         try {
                             receiver(data)
@@ -137,26 +165,28 @@ object WebSocketManager {
         })
     }
 
+    // 2. Moved helper function outside of the anonymous WebSocketListener
+    private fun getUserDeviceName(context: Context): String {
+        val name = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.N_MR1) {
+            Settings.Global.getString(context.contentResolver, Settings.Global.DEVICE_NAME)
+        } else {
+            Settings.Secure.getString(context.contentResolver, "bluetooth_name")
+        }
+        return name ?: "Unknown Android Device"
+    }
+
     fun sendMessage(msg: JSONObject) {
-        Log.d(TAG, "sendMessage called for type: ${msg.optString("type")}")
         if (!isSocketConnected) {
             messageQueue.add(msg)
-            Log.d(TAG, "Socket not connected, queuing message. Queue size: ${messageQueue.size}")
             return
         }
         try {
-            val device = currentDevice ?: run {
-                Log.w(TAG, "sendMessage failed: currentDevice is null")
-                return
-            }
-            Log.d(TAG, "Sending message directly: ${msg.optString("type")}")
+            val device = currentDevice ?: return
             val keyBytes  = CryptoUtil.decodeKey(device.encKey)
             val encrypted = CryptoUtil.encrypt(msg.toString(), keyBytes)
-            Log.d(TAG, "Message encrypted, sending to server...")
             webSocket?.send(encrypted)
-            Log.d(TAG, "Message sent successfully!")
         } catch (e: Exception) {
-            Log.e(TAG, "Send error: ${e.message}", e)
+            Log.e(TAG, "Send error: ${e.message}")
         }
     }
 
@@ -171,8 +201,13 @@ object WebSocketManager {
         cancelReconnect()
         reconnectJob = scope.launch {
             var backoff = 2000L
+            var attempts = 0
             while (isActive && _connectionState.value !is ConnectionState.Connected) {
-                Log.d(TAG, "Reconnecting in ${backoff}ms")
+                if (++attempts > 15) {
+                    Log.w(TAG, "Giving up reconnection after $attempts attempts")
+                    break
+                }
+                Log.d(TAG, "Reconnecting in ${backoff}ms (attempt $attempts)")
                 delay(backoff)
                 currentDevice?.let { attemptConnect(it) }
                 backoff = (backoff * 2).coerceAtMost(60_000L)
@@ -185,6 +220,7 @@ object WebSocketManager {
         webSocket?.close(1000, "User disconnected")
         webSocket = null
         isSocketConnected = false
+        appContext = null // Clear context references when explicitly disconnecting
         _connectionState.value = ConnectionState.Disconnected
     }
 
