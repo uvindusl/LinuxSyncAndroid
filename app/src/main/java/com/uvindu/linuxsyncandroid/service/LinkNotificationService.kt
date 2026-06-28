@@ -29,7 +29,8 @@ class LinkNotificationService : NotificationListenerService() {
     // ── media session ────────────────────────────────────────────
     private var mediaSessionManager: MediaSessionManager? = null
     private val controllerCallbacks = mutableMapOf<String, MediaController.Callback>()
-    private var lastTitle = ""
+    private var activeController: MediaController? = null
+    private var lastNowPlayingKey = ""
     private var batteryReceiver: BroadcastReceiver? = null
     private var lastBatteryLevel = -1
     private var lastBatteryCharging = false
@@ -61,6 +62,7 @@ class LinkNotificationService : NotificationListenerService() {
         }
         setupBatteryListener()
         sendWallpaper()
+        mediaControlReceiver?.let { WebSocketManager.removeMessageReceiver(it) }
         mediaControlReceiver = { data ->
             if (data.optString("type") == MessageType.MEDIA_CONTROL) {
                 handleMediaControl(data.optString("action"))
@@ -72,6 +74,7 @@ class LinkNotificationService : NotificationListenerService() {
     override fun onListenerDisconnected() {
         super.onListenerDisconnected()
         controllerCallbacks.clear()
+        activeController = null
         mediaControlReceiver?.let { WebSocketManager.removeMessageReceiver(it) }
         mediaControlReceiver = null
         if (batteryReceiver != null) {
@@ -125,27 +128,45 @@ class LinkNotificationService : NotificationListenerService() {
             controllerCallbacks.remove(it)
         }
         controllers.forEach { controller ->
+            activeController = controller
             if (controller.packageName !in controllerCallbacks) {
                 val cb = object : MediaController.Callback() {
                     override fun onMetadataChanged(metadata: MediaMetadata?) {
-                        metadata?.let { sendNowPlaying(it, controller) }
+                        metadata?.let { m ->
+                            sendNowPlaying(m, controller, getPlaybackState(controller))
+                        }
                     }
                     override fun onPlaybackStateChanged(state: PlaybackState?) {
-                        if (state?.state == PlaybackState.STATE_STOPPED ||
-                            state?.state == PlaybackState.STATE_NONE) sendStopped()
+                        when (state?.state) {
+                            PlaybackState.STATE_STOPPED,
+                            PlaybackState.STATE_NONE -> sendStopped()
+                            PlaybackState.STATE_PAUSED -> {
+                                val meta = controller.metadata
+                                if (meta != null) sendNowPlaying(meta, controller, false)
+                                else sendStopped()
+                            }
+                        }
                     }
                 }
                 controller.registerCallback(cb)
                 controllerCallbacks[controller.packageName] = cb
-                controller.metadata?.let { sendNowPlaying(it, controller) }
+                controller.metadata?.let { m ->
+                    sendNowPlaying(m, controller, getPlaybackState(controller))
+                }
             }
         }
     }
 
-    private fun sendNowPlaying(metadata: MediaMetadata, controller: MediaController) {
+    private fun getPlaybackState(controller: MediaController): Boolean {
+        val state = controller.playbackState?.state ?: PlaybackState.STATE_NONE
+        return state == PlaybackState.STATE_PLAYING
+    }
+
+    private fun sendNowPlaying(metadata: MediaMetadata, controller: MediaController, isPlaying: Boolean) {
         val title = metadata.getString(MediaMetadata.METADATA_KEY_TITLE) ?: return
-        if (title == lastTitle) return
-        lastTitle = title
+        val key = "$title|$isPlaying"
+        if (key == lastNowPlayingKey) return
+        lastNowPlayingKey = key
         WebSocketManager.sendMessage(JSONObject().apply {
             put("type",       MessageType.NOW_PLAYING)
             put("title",      title)
@@ -153,12 +174,12 @@ class LinkNotificationService : NotificationListenerService() {
             put("album",      metadata.getString(MediaMetadata.METADATA_KEY_ALBUM)  ?: "")
             put("duration",   metadata.getLong(MediaMetadata.METADATA_KEY_DURATION))
             put("app",        controller.packageName)
-            put("is_playing", true)
+            put("is_playing", isPlaying)
         })
     }
 
     private fun sendStopped() {
-        lastTitle = ""
+        lastNowPlayingKey = ""
         WebSocketManager.sendMessage(JSONObject().apply {
             put("type",       MessageType.NOW_PLAYING)
             put("is_playing", false)
@@ -244,9 +265,10 @@ class LinkNotificationService : NotificationListenerService() {
 
     private fun handleMediaControl(action: String) {
         try {
-            val component = ComponentName(packageName, this::class.java.name)
-            val sessions = mediaSessionManager?.getActiveSessions(component) ?: return
-            val controller = sessions.firstOrNull() ?: return
+            val controller = activeController ?: run {
+                Log.w(TAG, "Media control: no active controller")
+                return
+            }
             val transport = controller.transportControls
             when (action) {
                 "next" -> transport.skipToNext()
@@ -254,7 +276,7 @@ class LinkNotificationService : NotificationListenerService() {
                 "play" -> transport.play()
                 "pause" -> transport.pause()
             }
-            Log.d(TAG, "Media control: $action")
+            Log.d(TAG, "Media control: $action on ${controller.packageName}")
         } catch (e: Exception) {
             Log.e(TAG, "Media control error: ${e.message}")
         }
