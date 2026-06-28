@@ -10,6 +10,7 @@ import android.graphics.Bitmap
 import android.graphics.BitmapFactory
 import android.media.MediaMetadata
 import android.media.session.MediaController
+import android.media.session.MediaController.TransportControls
 import android.media.session.MediaSessionManager
 import android.media.session.PlaybackState
 import android.os.BatteryManager
@@ -33,6 +34,7 @@ class LinkNotificationService : NotificationListenerService() {
     private var lastBatteryLevel = -1
     private var lastBatteryCharging = false
     private var lastBatterySendMs = 0L
+    private var mediaControlReceiver: ((JSONObject) -> Unit)? = null
 
     private val BLOCKED = setOf(
         "android", "com.android.systemui",
@@ -59,11 +61,19 @@ class LinkNotificationService : NotificationListenerService() {
         }
         setupBatteryListener()
         sendWallpaper()
+        mediaControlReceiver = { data ->
+            if (data.optString("type") == MessageType.MEDIA_CONTROL) {
+                handleMediaControl(data.optString("action"))
+            }
+        }
+        WebSocketManager.addMessageReceiver(mediaControlReceiver!!)
     }
 
     override fun onListenerDisconnected() {
         super.onListenerDisconnected()
         controllerCallbacks.clear()
+        mediaControlReceiver?.let { WebSocketManager.removeMessageReceiver(it) }
+        mediaControlReceiver = null
         if (batteryReceiver != null) {
             unregisterReceiver(batteryReceiver)
             batteryReceiver = null
@@ -229,6 +239,24 @@ class LinkNotificationService : NotificationListenerService() {
             WebSocketManager.sendMessage(msg)
         } catch (e: Exception) {
             Log.e(TAG, "Error sending battery: ${e.message}")
+        }
+    }
+
+    private fun handleMediaControl(action: String) {
+        try {
+            val component = ComponentName(packageName, this::class.java.name)
+            val sessions = mediaSessionManager?.getActiveSessions(component) ?: return
+            val controller = sessions.firstOrNull() ?: return
+            val transport = controller.transportControls
+            when (action) {
+                "next" -> transport.skipToNext()
+                "prev" -> transport.skipToPrevious()
+                "play" -> transport.play()
+                "pause" -> transport.pause()
+            }
+            Log.d(TAG, "Media control: $action")
+        } catch (e: Exception) {
+            Log.e(TAG, "Media control error: ${e.message}")
         }
     }
 
