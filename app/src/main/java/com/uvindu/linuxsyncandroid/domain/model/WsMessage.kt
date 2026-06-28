@@ -10,4 +10,5 @@ object MessageType {
     const val CALL_ACTION       = "call_action"
     const val NOW_PLAYING       = "now_playing"
     const val BATTERY           = "battery"
+    const val MEDIA_CONTROL     = "media_control"
 }
