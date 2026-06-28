@@ -58,7 +58,9 @@ class ClipboardService(context: Context) {
 
     companion object {
         private const val TAG = "ClipboardService"
+        @Volatile
         private var lastSentClip = ""
+        @Volatile
         private var lastReceivedClip = ""
     }
 }

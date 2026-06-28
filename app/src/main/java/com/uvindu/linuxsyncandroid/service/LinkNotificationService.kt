@@ -30,11 +30,16 @@ class LinkNotificationService : NotificationListenerService() {
     private val controllerCallbacks = mutableMapOf<String, MediaController.Callback>()
     private var lastTitle = ""
     private var batteryReceiver: BroadcastReceiver? = null
+    private var lastBatteryLevel = -1
+    private var lastBatteryCharging = false
+    private var lastBatterySendMs = 0L
 
-//    private val BLOCKED = setOf(
-//        "android", "com.android.systemui",
-//        "com.android.launcher3", "com.uvindu.linuxsyncandroid"
-//    )
+    private val BLOCKED = setOf(
+        "android", "com.android.systemui",
+        "com.android.launcher3", "com.uvindu.linuxsyncandroid",
+        "com.google.android.gms", "com.google.android.gsf",
+        "com.android.vending", "com.android.providers.downloads"
+    )
 
     override fun onListenerConnected() {
         super.onListenerConnected()
@@ -68,11 +73,7 @@ class LinkNotificationService : NotificationListenerService() {
     // ── notifications ─────────────────────────────────────────────
 
     override fun onNotificationPosted(sbn: StatusBarNotification) {
-        Log.d(TAG, "onNotificationPosted: ${sbn.packageName}")
-//        if (sbn.packageName in BLOCKED) {
-//            Log.d(TAG, "Notification blocked by package name.")
-//            return
-//        }
+        if (sbn.packageName in BLOCKED) return
 
         try {
             val extras = sbn.notification.extras
@@ -93,9 +94,7 @@ class LinkNotificationService : NotificationListenerService() {
                 put("reply_key",    replyAction?.remoteInputs?.firstOrNull()?.resultKey ?: "")
                 put("timestamp",    System.currentTimeMillis())
             }
-            Log.d(TAG, "Sending notification: $msg")
             WebSocketManager.sendMessage(msg)
-            Log.d(TAG, "Notification from ${sbn.packageName}: $title - sent to server")
         } catch (e: Exception) {
             Log.e(TAG, "Error processing notification: ${e.message}", e)
         }
@@ -146,7 +145,6 @@ class LinkNotificationService : NotificationListenerService() {
             put("app",        controller.packageName)
             put("is_playing", true)
         })
-        Log.d(TAG, "Now playing: $title")
     }
 
     private fun sendStopped() {
@@ -164,27 +162,23 @@ class LinkNotificationService : NotificationListenerService() {
     private fun setupBatteryListener() {
         batteryReceiver = object : BroadcastReceiver() {
             override fun onReceive(context: Context?, intent: Intent?) {
-                sendBatteryStatus()
+                if (intent != null) sendBatteryStatus(intent)
             }
         }
         
         val filter = IntentFilter(Intent.ACTION_BATTERY_CHANGED)
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+        if (Build.VERSION.SDK_INT >= 34) {
             registerReceiver(batteryReceiver, filter, Context.RECEIVER_EXPORTED)
         } else {
             registerReceiver(batteryReceiver, filter)
         }
         
-        sendBatteryStatus()
+        // Send initial reading
+        registerReceiver(null, filter)?.let { sendBatteryStatus(it) }
     }
 
-    private fun sendBatteryStatus() {
+    private fun sendBatteryStatus(intent: Intent) {
         try {
-            val intent = registerReceiver(null, IntentFilter(Intent.ACTION_BATTERY_CHANGED))
-            if (intent == null) {
-                Log.w(TAG, "Could not get battery intent")
-                return
-            }
 
             val level = intent.getIntExtra(BatteryManager.EXTRA_LEVEL, -1)
             val scale = intent.getIntExtra(BatteryManager.EXTRA_SCALE, -1)
@@ -206,6 +200,17 @@ class LinkNotificationService : NotificationListenerService() {
                 else -> "None"
             }
 
+            // Throttle: skip if level + charging state unchanged and <30s since last send
+            val now = System.currentTimeMillis()
+            val levelChanged = percentage != lastBatteryLevel
+            val chargingChanged = isCharging != lastBatteryCharging
+            if (!levelChanged && !chargingChanged && now - lastBatterySendMs < 30_000) {
+                return
+            }
+            lastBatteryLevel = percentage
+            lastBatteryCharging = isCharging
+            lastBatterySendMs = now
+
             val msg = JSONObject().apply {
                 put("type", MessageType.BATTERY)
                 put("level", percentage)
@@ -219,10 +224,9 @@ class LinkNotificationService : NotificationListenerService() {
                     BatteryManager.BATTERY_STATUS_UNKNOWN -> "unknown"
                     else -> "unknown"
                 })
-                put("timestamp", System.currentTimeMillis())
+                put("timestamp", now)
             }
             WebSocketManager.sendMessage(msg)
-            Log.d(TAG, "Battery sent: $percentage% - Charging: $isCharging via $chargingVia")
         } catch (e: Exception) {
             Log.e(TAG, "Error sending battery: ${e.message}")
         }
@@ -234,18 +238,11 @@ class LinkNotificationService : NotificationListenerService() {
             
             var bitmap: Bitmap? = null
             
-            // Try method 1: getDrawable()
             try {
                 val drawable = wallpaperManager.drawable
-                if (drawable != null) {
-                    Log.d(TAG, "Method 1: getDrawable() succeeded")
-                    bitmap = convertDrawableToBitmap(drawable)
-                }
-            } catch (e: Exception) {
-                Log.w(TAG, "Method 1 (getDrawable) failed: ${e.message}")
-            }
+                if (drawable != null) bitmap = convertDrawableToBitmap(drawable)
+            } catch (_: Exception) {}
             
-            // Try method 2: peekDrawable()
             if (bitmap == null) {
                 try {
                     val drawable = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M) {
@@ -253,40 +250,25 @@ class LinkNotificationService : NotificationListenerService() {
                     } else {
                         wallpaperManager.drawable
                     }
-                    if (drawable != null) {
-                        Log.d(TAG, "Method 2: peekDrawable() succeeded")
-                        bitmap = convertDrawableToBitmap(drawable)
-                    }
-                } catch (e: Exception) {
-                    Log.w(TAG, "Method 2 (peekDrawable) failed: ${e.message}")
-                }
+                    if (drawable != null) bitmap = convertDrawableToBitmap(drawable)
+                } catch (_: Exception) {}
             }
             
-            // Try method 3: Get from file system (Samsung stores wallpapers)
             if (bitmap == null) {
                 try {
                     val wallpaperFile = File("/data/data/com.android.systemui/files/wallpapers/wallpaper_0")
-                    
                     if (wallpaperFile.exists() && wallpaperFile.length() > 0) {
-                        Log.d(TAG, "Method 3: Found wallpaper file")
                         bitmap = BitmapFactory.decodeFile(wallpaperFile.absolutePath)
-                        if (bitmap != null) {
-                            Log.d(TAG, "Method 3: Successfully decoded wallpaper file")
-                        }
                     }
-                } catch (e: Exception) {
-                    Log.w(TAG, "Method 3 (file system) failed: ${e.message}")
-                }
+                } catch (_: Exception) {}
             }
             
             if (bitmap != null && bitmap.width > 0 && bitmap.height > 0) {
                 sendWallpaperBitmap(bitmap)
             } else {
-                Log.w(TAG, "No wallpaper bitmap obtained, sending default")
                 sendDefaultWallpaper()
             }
         } catch (e: Exception) {
-            Log.e(TAG, "Error in sendWallpaper: ${e.message}")
             sendDefaultWallpaper()
         }
     }
@@ -308,21 +290,11 @@ class LinkNotificationService : NotificationListenerService() {
     private fun convertDrawableToBitmap(drawable: android.graphics.drawable.Drawable): Bitmap? {
         return try {
             when (drawable) {
-                is android.graphics.drawable.BitmapDrawable -> {
-                    Log.d(TAG, "Converting BitmapDrawable directly")
-                    drawable.bitmap
-                }
+                is android.graphics.drawable.BitmapDrawable -> drawable.bitmap
                 else -> {
                     val width = drawable.intrinsicWidth.coerceAtLeast(100)
                     val height = drawable.intrinsicHeight.coerceAtLeast(100)
-                    
-                    Log.d(TAG, "Converting generic drawable: ${width}x${height}")
-                    
-                    if (width > 4096 || height > 4096) {
-                        Log.w(TAG, "Drawable too large: ${width}x${height}")
-                        return null
-                    }
-                    
+                    if (width > 4096 || height > 4096) return null
                     val b = Bitmap.createBitmap(width, height, Bitmap.Config.ARGB_8888)
                     val canvas = android.graphics.Canvas(b)
                     drawable.setBounds(0, 0, width, height)
@@ -330,16 +302,13 @@ class LinkNotificationService : NotificationListenerService() {
                     b
                 }
             }
-        } catch (e: Exception) {
-            Log.e(TAG, "Error converting drawable: ${e.message}")
-            null
-        }
+        } catch (_: Exception) { null }
     }
 
     private fun sendWallpaperBitmap(bitmap: Bitmap) {
         try {
             val baos = ByteArrayOutputStream()
-            bitmap.compress(Bitmap.CompressFormat.JPEG, 85, baos)
+            bitmap.compress(Bitmap.CompressFormat.JPEG, 50, baos)
             val data = baos.toByteArray()
             val base64 = Base64.getEncoder().encodeToString(data)
             
@@ -351,7 +320,6 @@ class LinkNotificationService : NotificationListenerService() {
                 put("timestamp", System.currentTimeMillis())
             }
             WebSocketManager.sendMessage(msg)
-            Log.d(TAG, "Wallpaper sent: ${bitmap.width}x${bitmap.height}, size: ${data.size / 1024}KB")
         } catch (e: Exception) {
             Log.e(TAG, "Error sending wallpaper bitmap: ${e.message}")
         }

@@ -25,6 +25,7 @@ import okhttp3.WebSocket
 import okhttp3.WebSocketListener
 import org.json.JSONObject
 import java.util.concurrent.ConcurrentLinkedQueue
+import java.util.concurrent.CopyOnWriteArrayList
 import java.util.concurrent.TimeUnit
 
 object WebSocketManager {
@@ -35,6 +36,7 @@ object WebSocketManager {
     private val messageQueue = ConcurrentLinkedQueue<JSONObject>()
 
     private var webSocket: WebSocket? = null
+    @Volatile
     private var currentDevice: PairedDevice? = null
     private val scope = CoroutineScope(Dispatchers.IO + SupervisorJob())
     private var reconnectJob: Job? = null
@@ -45,7 +47,7 @@ object WebSocketManager {
     private val _connectionState = MutableStateFlow<ConnectionState>(ConnectionState.Disconnected)
     val connectionState: StateFlow<ConnectionState> = _connectionState
 
-    private val messageReceivers = mutableListOf<(JSONObject) -> Unit>()
+    private val messageReceivers = CopyOnWriteArrayList<(JSONObject) -> Unit>()
 
     fun addMessageReceiver(receiver: (JSONObject) -> Unit) {
         messageReceivers.add(receiver)
@@ -174,25 +176,17 @@ object WebSocketManager {
     }
 
     fun sendMessage(msg: JSONObject) {
-        Log.d(TAG, "sendMessage called for type: ${msg.optString("type")}")
         if (!isSocketConnected) {
             messageQueue.add(msg)
-            Log.d(TAG, "Socket not connected, queuing message. Queue size: ${messageQueue.size}")
             return
         }
         try {
-            val device = currentDevice ?: run {
-                Log.w(TAG, "sendMessage failed: currentDevice is null")
-                return
-            }
-            Log.d(TAG, "Sending message directly: ${msg.optString("type")}")
+            val device = currentDevice ?: return
             val keyBytes  = CryptoUtil.decodeKey(device.encKey)
             val encrypted = CryptoUtil.encrypt(msg.toString(), keyBytes)
-            Log.d(TAG, "Message encrypted, sending to server...")
             webSocket?.send(encrypted)
-            Log.d(TAG, "Message sent successfully!")
         } catch (e: Exception) {
-            Log.e(TAG, "Send error: ${e.message}", e)
+            Log.e(TAG, "Send error: ${e.message}")
         }
     }
 
@@ -207,8 +201,13 @@ object WebSocketManager {
         cancelReconnect()
         reconnectJob = scope.launch {
             var backoff = 2000L
+            var attempts = 0
             while (isActive && _connectionState.value !is ConnectionState.Connected) {
-                Log.d(TAG, "Reconnecting in ${backoff}ms")
+                if (++attempts > 15) {
+                    Log.w(TAG, "Giving up reconnection after $attempts attempts")
+                    break
+                }
+                Log.d(TAG, "Reconnecting in ${backoff}ms (attempt $attempts)")
                 delay(backoff)
                 currentDevice?.let { attemptConnect(it) }
                 backoff = (backoff * 2).coerceAtMost(60_000L)
