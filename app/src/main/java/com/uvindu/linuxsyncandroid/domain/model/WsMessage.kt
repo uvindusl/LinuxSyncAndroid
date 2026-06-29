@@ -12,6 +12,8 @@ object MessageType {
     const val NOW_PLAYING         = "now_playing"
     const val BATTERY             = "battery"
     const val MEDIA_CONTROL       = "media_control"
+    const val LAPTOP_MEDIA        = "laptop_media"
+    const val LAPTOP_NOW_PLAYING  = "laptop_now_playing"
     const val WALLPAPER           = "wallpaper"
     const val CONFIG              = "config"
 }

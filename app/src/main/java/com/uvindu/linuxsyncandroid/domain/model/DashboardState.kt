@@ -14,5 +14,10 @@ data class DashboardState(
     val nowPlayingAlbum: String? = null,
     val nowPlayingApp: String? = null,
     val nowPlayingIsPlaying: Boolean = false,
-    val nowPlayingDuration: Long = 0L
+    val nowPlayingDuration: Long = 0L,
+    val laptopTrackTitle: String? = null,
+    val laptopTrackArtist: String? = null,
+    val laptopTrackAlbum: String? = null,
+    val laptopIsPlaying: Boolean = false,
+    val laptopArtUrl: String? = null
 )

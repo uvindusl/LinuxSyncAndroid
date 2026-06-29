@@ -105,6 +105,15 @@ class DashboardViewModel(
                 val charging = msg.optBoolean("is_charging", false)
                 uiState = uiState.copy(batteryLevel = level, isCharging = charging)
             }
+            MessageType.LAPTOP_NOW_PLAYING -> {
+                uiState = uiState.copy(
+                    laptopTrackTitle = msg.optString("title", null),
+                    laptopTrackArtist = msg.optString("artist", null),
+                    laptopTrackAlbum = msg.optString("album", null),
+                    laptopIsPlaying = msg.optBoolean("is_playing", false),
+                    laptopArtUrl = msg.optString("art_url", null)
+                )
+            }
             MessageType.NOW_PLAYING -> {
                 val isPlaying = msg.optBoolean("is_playing", false)
                 val title = msg.optString("title", null)

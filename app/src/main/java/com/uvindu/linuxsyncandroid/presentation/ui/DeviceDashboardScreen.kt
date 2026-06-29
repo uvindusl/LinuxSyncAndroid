@@ -75,15 +75,18 @@ fun DeviceDashboardScreen(
                 )
             }
 
-            if (state.isConnected && state.nowPlayingTitle != null) {
+            if (state.isConnected) {
                 item {
                     NowPlayingCard(
-                        title = state.nowPlayingTitle,
-                        artist = state.nowPlayingArtist,
-                        album = state.nowPlayingAlbum,
-                        app = state.nowPlayingApp,
-                        isPlaying = state.nowPlayingIsPlaying,
-                        duration = state.nowPlayingDuration
+                        phoneTitle = state.nowPlayingTitle,
+                        phoneArtist = state.nowPlayingArtist,
+                        phoneApp = state.nowPlayingApp,
+                        phoneIsPlaying = state.nowPlayingIsPlaying,
+                        laptopTrackTitle = state.laptopTrackTitle,
+                        laptopTrackArtist = state.laptopTrackArtist,
+                        laptopTrackAlbum = state.laptopTrackAlbum,
+                        laptopIsPlaying = state.laptopIsPlaying,
+                        laptopArtUrl = state.laptopArtUrl,
                     )
                 }
             }
