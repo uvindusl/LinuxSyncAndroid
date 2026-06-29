@@ -22,13 +22,16 @@ import com.uvindu.linuxsyncandroid.domain.model.MessageType
 import org.json.JSONObject
 import java.io.ByteArrayOutputStream
 import java.io.File
-import java.util.Base64
+import android.util.Base64
 
 class LinkNotificationService : NotificationListenerService() {
 
     // ── media session ────────────────────────────────────────────
     private var mediaSessionManager: MediaSessionManager? = null
-    private val controllerCallbacks = mutableMapOf<String, MediaController.Callback>()
+    private val registeredCallbacks = mutableMapOf<MediaController, MediaController.Callback>()
+    private var sessionsListener: MediaSessionManager.OnActiveSessionsChangedListener? = null
+    private var sessionsComponent: ComponentName? = null
+    @Volatile
     private var activeController: MediaController? = null
     private var lastNowPlayingKey = ""
     private var batteryReceiver: BroadcastReceiver? = null
@@ -52,10 +55,13 @@ class LinkNotificationService : NotificationListenerService() {
         try {
             mediaSessionManager = getSystemService(MEDIA_SESSION_SERVICE) as MediaSessionManager
             val component = ComponentName(packageName, this::class.java.name)
-            mediaSessionManager?.addOnActiveSessionsChangedListener(
-                { controllers -> updateControllers(controllers ?: emptyList()) },
-                component
-            )
+            sessionsComponent = component
+            // Remove old listener before adding new one to prevent duplicates
+            sessionsListener?.let { mediaSessionManager?.removeOnActiveSessionsChangedListener(it) }
+            sessionsListener = MediaSessionManager.OnActiveSessionsChangedListener { controllers ->
+                updateControllers(controllers ?: emptyList())
+            }
+            mediaSessionManager?.addOnActiveSessionsChangedListener(sessionsListener!!, component)
             updateControllers(mediaSessionManager?.getActiveSessions(component) ?: emptyList())
         } catch (e: Exception) {
             Log.e(TAG, "Media session error: ${e.message}")
@@ -73,7 +79,15 @@ class LinkNotificationService : NotificationListenerService() {
 
     override fun onListenerDisconnected() {
         super.onListenerDisconnected()
-        controllerCallbacks.clear()
+        // Unregister all media controller callbacks to prevent leaks
+        registeredCallbacks.forEach { (controller, cb) ->
+            try { controller.unregisterCallback(cb) } catch (_: Exception) {}
+        }
+        registeredCallbacks.clear()
+        // Remove sessions listener
+        sessionsListener?.let { mediaSessionManager?.removeOnActiveSessionsChangedListener(it) }
+        sessionsListener = null
+        sessionsComponent = null
         activeController = null
         mediaControlReceiver?.let { WebSocketManager.removeMessageReceiver(it) }
         mediaControlReceiver = null
@@ -115,7 +129,7 @@ class LinkNotificationService : NotificationListenerService() {
 
     override fun onNotificationRemoved(sbn: StatusBarNotification) {
         WebSocketManager.sendMessage(JSONObject().apply {
-            put("type", "notification_removed")
+            put("type", MessageType.NOTIFICATION_REMOVED)
             put("id",   sbn.key)
         })
     }
@@ -123,13 +137,15 @@ class LinkNotificationService : NotificationListenerService() {
     // ── media sessions ────────────────────────────────────────────
 
     private fun updateControllers(controllers: List<MediaController>) {
-        val active = controllers.map { it.packageName }.toSet()
-        controllerCallbacks.keys.filter { it !in active }.forEach {
-            controllerCallbacks.remove(it)
+        val incoming = controllers.map { it }.toSet()
+        // Unregister callbacks for controllers no longer active
+        registeredCallbacks.keys.filter { it !in incoming }.forEach { old ->
+            try { old.unregisterCallback(registeredCallbacks[old]!!) } catch (_: Exception) {}
+            registeredCallbacks.remove(old)
         }
         controllers.forEach { controller ->
             activeController = controller
-            if (controller.packageName !in controllerCallbacks) {
+            if (controller !in registeredCallbacks) {
                 val cb = object : MediaController.Callback() {
                     override fun onMetadataChanged(metadata: MediaMetadata?) {
                         metadata?.let { m ->
@@ -149,7 +165,7 @@ class LinkNotificationService : NotificationListenerService() {
                     }
                 }
                 controller.registerCallback(cb)
-                controllerCallbacks[controller.packageName] = cb
+                registeredCallbacks[controller] = cb
                 controller.metadata?.let { m ->
                     sendNowPlaying(m, controller, getPlaybackState(controller))
                 }
@@ -199,7 +215,7 @@ class LinkNotificationService : NotificationListenerService() {
         
         val filter = IntentFilter(Intent.ACTION_BATTERY_CHANGED)
         if (Build.VERSION.SDK_INT >= 34) {
-            registerReceiver(batteryReceiver, filter, Context.RECEIVER_EXPORTED)
+            registerReceiver(batteryReceiver, filter, Context.RECEIVER_NOT_EXPORTED)
         } else {
             registerReceiver(batteryReceiver, filter)
         }
@@ -360,10 +376,10 @@ class LinkNotificationService : NotificationListenerService() {
             val baos = ByteArrayOutputStream()
             bitmap.compress(Bitmap.CompressFormat.JPEG, 50, baos)
             val data = baos.toByteArray()
-            val base64 = Base64.getEncoder().encodeToString(data)
+            val base64 = Base64.encodeToString(data, Base64.NO_WRAP)
             
             val msg = JSONObject().apply {
-                put("type", "wallpaper")
+                put("type", MessageType.WALLPAPER)
                 put("data", base64)
                 put("width", bitmap.width)
                 put("height", bitmap.height)

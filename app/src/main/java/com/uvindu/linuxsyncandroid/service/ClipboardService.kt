@@ -38,8 +38,12 @@ class ClipboardService(context: Context) {
         lastSentClip = content
     }
 
+    fun cleanup() {
+        clipboardManager.removePrimaryClipChangedListener(clipboardListener)
+    }
+
     fun handleIncomingMessage(msg: JSONObject) {
-        if (msg.optString("type") == "clipboard") {
+        if (msg.optString("type") == MessageType.CLIPBOARD) {
             val content = msg.optString("body")
             if (content != lastReceivedClip) {
                 try {

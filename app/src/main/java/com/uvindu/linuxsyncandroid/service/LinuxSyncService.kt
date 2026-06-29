@@ -23,6 +23,7 @@ class LinuxSyncService : Service() {
 
     private lateinit var clipboardService: ClipboardService
     private val scope = CoroutineScope(Dispatchers.IO + SupervisorJob())
+    private var clipboardReceiver: ((org.json.JSONObject) -> Unit)? = null
 
     override fun onCreate() {
         super.onCreate()
@@ -31,9 +32,8 @@ class LinuxSyncService : Service() {
         clipboardService = ClipboardService(this)
 
         // Register clipboard as a message receiver
-        WebSocketManager.addMessageReceiver { msg ->
-            clipboardService.handleIncomingMessage(msg)
-        }
+        clipboardReceiver = { msg -> clipboardService.handleIncomingMessage(msg) }
+        WebSocketManager.addMessageReceiver(clipboardReceiver!!)
 
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
             startForeground(
@@ -62,6 +62,9 @@ class LinuxSyncService : Service() {
     }
 
     override fun onDestroy() {
+        clipboardReceiver?.let { WebSocketManager.removeMessageReceiver(it) }
+        clipboardReceiver = null
+        clipboardService.cleanup()
         WebSocketManager.disconnect()
         scope.cancel()
         super.onDestroy()

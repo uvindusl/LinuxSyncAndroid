@@ -33,8 +33,13 @@ object WebSocketManager {
     private const val TAG = "WebSocketManager"
     @Volatile
     private var isSocketConnected = false
+    @Volatile
+    private var connectionAttemptInProgress = false
+    @Volatile
+    private var shouldAbortConnection = false
     private val messageQueue = ConcurrentLinkedQueue<JSONObject>()
 
+    @Volatile
     private var webSocket: WebSocket? = null
     @Volatile
     private var currentDevice: PairedDevice? = null
@@ -63,12 +68,11 @@ object WebSocketManager {
         .pingInterval(20, TimeUnit.SECONDS)
         .build()
 
-    // 1. Context added here to fetch the device name safely
     fun connect(context: Context, device: PairedDevice) {
-        if (_connectionState.value is ConnectionState.Connected ||
-            _connectionState.value is ConnectionState.Connecting) return
+        if (_connectionState.value is ConnectionState.Connected) return
+        if (connectionAttemptInProgress) return
 
-        this.appContext = context.applicationContext // Save app context to avoid memory leaks
+        this.appContext = context.applicationContext
         currentDevice = device
         cancelReconnect()
         scope.launch {
@@ -77,6 +81,8 @@ object WebSocketManager {
     }
 
     private suspend fun attemptConnect(device: PairedDevice) {
+        if (connectionAttemptInProgress) return
+        connectionAttemptInProgress = true
         _connectionState.value = ConnectionState.Connecting
 
         var resolvedIp = device.ip
@@ -99,6 +105,7 @@ object WebSocketManager {
 
             override fun onOpen(ws: WebSocket, response: Response) {
                 Log.d(TAG, "Socket open — sending auth")
+                shouldAbortConnection = false
                 webSocket = ws
 
                 val context = appContext
@@ -115,25 +122,29 @@ object WebSocketManager {
             override fun onMessage(ws: WebSocket, text: String) {
                 try {
                     if (_connectionState.value is ConnectionState.Connecting) {
-                        val msg = JSONObject(text)
-                        if (msg.optString("type") == MessageType.AUTH_OK) {
-                            Log.d(TAG, "Auth OK — connected")
+                        try {
+                            val msg = JSONObject(text)
+                            if (msg.optString("type") == MessageType.AUTH_OK) {
+                                Log.d(TAG, "Auth OK — connected")
 
-                            // Important: update states BEFORE processing queue to allow direct sends
-                            isSocketConnected = true
-                            _connectionState.value = ConnectionState.Connected(device)
-                            cancelReconnect()
+                                connectionAttemptInProgress = false
+                                isSocketConnected = true
+                                _connectionState.value = ConnectionState.Connected(device)
+                                cancelReconnect()
 
-                            scope.launch {
-                                while (messageQueue.isNotEmpty()) {
-                                    messageQueue.poll()?.let { queuedMsg ->
-                                        Log.d(TAG, "Sending queued message: ${queuedMsg.optString("type")}")
-                                        sendMessage(queuedMsg)
+                                scope.launch {
+                                    while (messageQueue.isNotEmpty()) {
+                                        messageQueue.poll()?.let { queuedMsg ->
+                                            Log.d(TAG, "Sending queued message: ${queuedMsg.optString("type")}")
+                                            sendMessage(queuedMsg)
+                                        }
                                     }
                                 }
+                                return
                             }
-                            return
-                        }
+                        } catch (_: Exception) {}
+                        // Non-AUTH message while connecting — not encrypted yet, ignore
+                        return
                     }
 
                     val keyBytes  = CryptoUtil.decodeKey(device.encKey)
@@ -191,8 +202,10 @@ object WebSocketManager {
     }
 
     private fun handleDisconnect(shouldReconnect: Boolean) {
+        connectionAttemptInProgress = false
         webSocket = null
         isSocketConnected = false
+        while (messageQueue.poll() != null) { }
         _connectionState.value = ConnectionState.Disconnected
         if (shouldReconnect) startReconnectLoop()
     }
@@ -216,11 +229,13 @@ object WebSocketManager {
     }
 
     fun disconnect() {
+        connectionAttemptInProgress = false
         cancelReconnect()
         webSocket?.close(1000, "User disconnected")
         webSocket = null
         isSocketConnected = false
-        appContext = null // Clear context references when explicitly disconnecting
+        while (messageQueue.poll() != null) { }
+        appContext = null
         _connectionState.value = ConnectionState.Disconnected
     }
 
