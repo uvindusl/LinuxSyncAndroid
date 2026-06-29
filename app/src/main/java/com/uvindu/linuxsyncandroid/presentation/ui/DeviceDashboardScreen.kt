@@ -20,6 +20,7 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import com.uvindu.linuxsyncandroid.domain.model.DashboardState
+import com.uvindu.linuxsyncandroid.presentation.components.BatteryCard
 import com.uvindu.linuxsyncandroid.presentation.components.DeviceConnectionCard
 import com.uvindu.linuxsyncandroid.presentation.components.NowPlayingCard
 
@@ -76,6 +77,12 @@ fun DeviceDashboardScreen(
             }
 
             if (state.isConnected) {
+                item {
+                    BatteryCard(
+                        level = state.laptopBatteryLevel,
+                        isCharging = state.laptopBatteryCharging
+                    )
+                }
                 item {
                     NowPlayingCard(
                         phoneTitle = state.nowPlayingTitle,

@@ -126,6 +126,12 @@ class DashboardViewModel(
                     nowPlayingDuration = msg.optLong("duration", 0L)
                 )
             }
+            MessageType.LAPTOP_BATTERY -> {
+                uiState = uiState.copy(
+                    laptopBatteryLevel = msg.optInt("level", 0),
+                    laptopBatteryCharging = msg.optBoolean("is_charging", false)
+                )
+            }
             "notification_reply" -> {
                 // TODO: fire reply PendingIntent
             }

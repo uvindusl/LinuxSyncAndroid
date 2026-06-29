@@ -19,5 +19,7 @@ data class DashboardState(
     val laptopTrackArtist: String? = null,
     val laptopTrackAlbum: String? = null,
     val laptopIsPlaying: Boolean = false,
-    val laptopArtUrl: String? = null
+    val laptopArtUrl: String? = null,
+    val laptopBatteryLevel: Int = 0,
+    val laptopBatteryCharging: Boolean = false
 )
