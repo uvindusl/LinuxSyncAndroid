@@ -132,8 +132,8 @@ class DashboardViewModel(
                     laptopBatteryCharging = msg.optBoolean("is_charging", false)
                 )
             }
-            "notification_reply" -> {
-                // TODO: fire reply PendingIntent
+            MessageType.NOTIFICATION_REPLY -> {
+                // Handled by LinkNotificationService
             }
             "call_action" -> {
                 // TODO: accept/decline via TelecomManager

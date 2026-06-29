@@ -15,6 +15,7 @@ import android.media.session.MediaSessionManager
 import android.media.session.PlaybackState
 import android.os.BatteryManager
 import android.os.Build
+import android.os.Bundle
 import android.service.notification.NotificationListenerService
 import android.service.notification.StatusBarNotification
 import android.util.Log
@@ -39,6 +40,7 @@ class LinkNotificationService : NotificationListenerService() {
     private var lastBatteryCharging = false
     private var lastBatterySendMs = 0L
     private var mediaControlReceiver: ((JSONObject) -> Unit)? = null
+    private val replyActions = mutableMapOf<String, android.app.Notification.Action>()
 
     private val BLOCKED = setOf(
         "android", "com.android.systemui",
@@ -70,8 +72,9 @@ class LinkNotificationService : NotificationListenerService() {
         sendWallpaper()
         mediaControlReceiver?.let { WebSocketManager.removeMessageReceiver(it) }
         mediaControlReceiver = { data ->
-            if (data.optString("type") == MessageType.MEDIA_CONTROL) {
-                handleMediaControl(data.optString("action"))
+            when (data.optString("type")) {
+                MessageType.MEDIA_CONTROL -> handleMediaControl(data.optString("action"))
+                MessageType.NOTIFICATION_REPLY -> handleNotificationReply(data)
             }
         }
         WebSocketManager.addMessageReceiver(mediaControlReceiver!!)
@@ -110,6 +113,10 @@ class LinkNotificationService : NotificationListenerService() {
             val replyAction = sbn.notification.actions
                 ?.firstOrNull { it.remoteInputs?.isNotEmpty() == true }
 
+            if (replyAction != null) {
+                replyActions[sbn.key] = replyAction
+            }
+
             val msg = JSONObject().apply {
                 put("type",         MessageType.NOTIFICATION)
                 put("id",           sbn.key)
@@ -128,6 +135,7 @@ class LinkNotificationService : NotificationListenerService() {
     }
 
     override fun onNotificationRemoved(sbn: StatusBarNotification) {
+        replyActions.remove(sbn.key)
         WebSocketManager.sendMessage(JSONObject().apply {
             put("type", MessageType.NOTIFICATION_REMOVED)
             put("id",   sbn.key)
@@ -388,6 +396,30 @@ class LinkNotificationService : NotificationListenerService() {
             WebSocketManager.sendMessage(msg)
         } catch (e: Exception) {
             Log.e(TAG, "Error sending wallpaper bitmap: ${e.message}")
+        }
+    }
+
+    private fun handleNotificationReply(data: JSONObject) {
+        val notifId = data.optString("id")
+        val replyText = data.optString("text")
+        if (notifId.isEmpty() || replyText.isEmpty()) return
+
+        val action = replyActions[notifId] ?: run {
+            Log.w(TAG, "No stored reply action for notification $notifId")
+            return
+        }
+
+        try {
+            val intent = Intent()
+            val remoteInput = action.remoteInputs.firstOrNull() ?: return
+            val results = Bundle().apply {
+                putString(remoteInput.resultKey, replyText)
+            }
+            android.app.RemoteInput.addResultsToIntent(action.remoteInputs, intent, results)
+            action.actionIntent.send(this, 0, intent)
+            Log.d(TAG, "Reply sent to $notifId: $replyText")
+        } catch (e: Exception) {
+            Log.e(TAG, "Failed to send reply: ${e.message}", e)
         }
     }
 
