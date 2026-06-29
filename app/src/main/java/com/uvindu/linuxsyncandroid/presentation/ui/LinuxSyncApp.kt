@@ -38,14 +38,8 @@ fun LinuxSyncApp() {
     if (uiState.isConnected || uiState.connectionMessage == "Connecting...") {
         DeviceDashboardScreen(
             state = uiState,
-            onConfigToggle = { actionKey, value ->
-                dashboardViewModel.updateRemoteConfig(actionKey, value)
-            },
             onDisconnectRequested = {
                 dashboardViewModel.terminateConnection()
-            },
-            onUnpairRequested = {
-                dashboardViewModel.unpairDevice()
             }
         )
     } else {

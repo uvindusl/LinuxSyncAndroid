@@ -13,6 +13,7 @@ import com.uvindu.linuxsyncandroid.domain.model.ConnectionState
 import com.uvindu.linuxsyncandroid.domain.model.DashboardState
 import com.uvindu.linuxsyncandroid.domain.model.PairedDevice
 import com.uvindu.linuxsyncandroid.domain.model.QRCodePayload
+import com.uvindu.linuxsyncandroid.domain.model.MessageType
 import com.uvindu.linuxsyncandroid.domain.repository.DeviceRepository
 import com.uvindu.linuxsyncandroid.service.WebSocketManager
 import kotlinx.coroutines.flow.launchIn
@@ -99,10 +100,21 @@ class DashboardViewModel(
 
     private fun handleIncoming(msg: JSONObject) {
         when (msg.optString("type")) {
-            "battery" -> {
+            MessageType.BATTERY -> {
+                val level = msg.optInt("level", 0)
+                val charging = msg.optBoolean("is_charging", false)
+                uiState = uiState.copy(batteryLevel = level, isCharging = charging)
+            }
+            MessageType.NOW_PLAYING -> {
+                val isPlaying = msg.optBoolean("is_playing", false)
+                val title = msg.optString("title", null)
                 uiState = uiState.copy(
-                    batteryLevel = msg.optInt("level", 0),
-                    isCharging = msg.optBoolean("is_charging", false)
+                    nowPlayingTitle = title,
+                    nowPlayingArtist = msg.optString("artist", null),
+                    nowPlayingAlbum = msg.optString("album", null),
+                    nowPlayingApp = msg.optString("app", null),
+                    nowPlayingIsPlaying = isPlaying,
+                    nowPlayingDuration = msg.optLong("duration", 0L)
                 )
             }
             "notification_reply" -> {

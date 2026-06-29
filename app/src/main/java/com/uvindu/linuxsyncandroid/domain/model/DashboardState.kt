@@ -8,5 +8,11 @@ data class DashboardState(
     val isCharging: Boolean = false,
     val isMuted: Boolean = false,
     val isDndEnabled: Boolean = false,
-    val areNotificationsEnabled: Boolean = true
+    val areNotificationsEnabled: Boolean = true,
+    val nowPlayingTitle: String? = null,
+    val nowPlayingArtist: String? = null,
+    val nowPlayingAlbum: String? = null,
+    val nowPlayingApp: String? = null,
+    val nowPlayingIsPlaying: Boolean = false,
+    val nowPlayingDuration: Long = 0L
 )
